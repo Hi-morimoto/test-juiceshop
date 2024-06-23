@@ -1,0 +1,66 @@
+name: Build and Deploy to JFrog Artifactory
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '14'
+
+    - name: Cache Node.js modules
+      uses: actions/cache@v2
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Run tests
+      run: npm test
+
+    - name: Build Docker image
+      run: docker build -t juice-shop:latest .
+
+    - name: Set up JFrog CLI
+      uses: jfrog/setup-jfrog-cli@v3
+      env:
+        JF_URL: ${{ secrets.JF_URL }}
+        JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+        JFROG_API_KEY: ${{ secrets.JFROG_API_KEY }}
+
+    - name: Log in to JFrog Artifactory
+      run: |
+        echo $JFROG_API_KEY | docker login ${{ secrets.JF_URL }} -u ${{ secrets.JFROG_USERNAME }} --password-stdin
+
+    - name: Tag and push Docker image to JFrog Artifactory
+      env:
+        IMAGE_NAME: ${{ secrets.JF_URL }}/docker/juice-shop:${{ github.run_number }}
+      run: |
+        docker tag juice-shop:latest $IMAGE_NAME
+        docker push $IMAGE_NAME
+
+    - name: Publish build info with JFrog CLI
+      env:
+        JFROG_CLI_BUILD_NAME: juice-shop-build
+        JFROG_CLI_BUILD_NUMBER: ${{ github.run_number }}
+      run: |
+        jf rt build-collect-env
+        jf rt build-add-git
+        jf rt build-publish
